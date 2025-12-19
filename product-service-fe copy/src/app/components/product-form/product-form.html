@@ -1,0 +1,22 @@
+<h2>{{ isEditMode ? 'Update Product' : 'Create Product' }}</h2>
+
+<form (ngSubmit)="save()">
+  <label>Name</label>
+  <input type="text" [(ngModel)]="product.name" name="name" required />
+
+  <label>Price</label>
+  <input type="number" [(ngModel)]="product.price" name="price" required />
+
+  <label>Quantity</label>
+  <input type="number" [(ngModel)]="product.quantity" name="quantity" required />
+
+  <label>Category</label>
+  <input type="text" [(ngModel)]="product.category" name="category" />
+
+  <div class="actions">
+    <button type="submit">
+      {{ isEditMode ? 'Update' : 'Create' }}
+    </button>
+    <button type="button" class="cancel" (click)="cancel()">Cancel</button>
+  </div>
+</form>
