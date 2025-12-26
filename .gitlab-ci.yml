@@ -1,5 +1,7 @@
 stages:
   - validate
+  # - infra_plan
+  # - infra_apply
   - build
   - package
   - deploy
@@ -23,7 +25,33 @@ terraform_validate:
     - cd terraform
     - terraform init -backend=false
     - terraform validate
+# Étape 2 : Préparer le plan (voir ce qui va être fait)
+# terraform_plan:
+#   stage: infra_plan
+#   image:
+#     name: hashicorp/terraform:latest
+#     entrypoint: [""]
+#   script:
+#     - cd terraform
+#     - terraform init
+#     - terraform plan -out=tfplan
+#   artifacts:
+#     paths:
+#       - terraform/tfplan # On garde le plan pour l'étape suivante
 
+# Étape 3 : Appliquer les changements (Création de l'ECR)
+# terraform_apply:
+#   stage: infra_apply
+#   image:
+#     name: hashicorp/terraform:latest
+#     entrypoint: [""]
+#   script:
+#     - cd terraform
+#     - terraform init
+#     - terraform apply -auto-approve tfplan
+#   when: manual  # <--- C'est ici que vous déclenchez l'action manuellement
+#   dependencies:
+#     - terraform_plan
 # --- 2. BUILD STAGE (Java & Angular) ---
 build_backend:
   stage: build
