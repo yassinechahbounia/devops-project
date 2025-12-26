@@ -16,7 +16,9 @@ variables:
 # --- 1. VALIDATE STAGE (Terraform) ---
 terraform_validate:
   stage: validate
-  image: hashicorp/terraform:latest
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]  # <--- Cette ligne est CRUCIALE
   script:
     - cd terraform
     - terraform init -backend=false
