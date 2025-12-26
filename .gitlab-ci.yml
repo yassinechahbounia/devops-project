@@ -1,4 +1,5 @@
 stages:
+  - validate
   - build
   - package
   - deploy
@@ -9,21 +10,48 @@ variables:
   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
   ECR_REPOSITORY: ${REPO_NAME}
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  # Add your S3 Bucket name for the Angular Frontend
+  S3_BUCKET_NAME: "your-angular-app-bucket-name"
 
-# 1. Build the Java Artifact (inside /product-service)
-build_jar:
+# --- 1. VALIDATE STAGE (Terraform) ---
+terraform_validate:
+  stage: validate
+  image: hashicorp/terraform:latest
+  script:
+    - cd terraform
+    - terraform init -backend=false
+    - terraform validate
+
+# --- 2. BUILD STAGE (Java & Angular) ---
+build_backend:
   stage: build
   image: maven:3.8.5-openjdk-17
   script:
-    - cd product-service             # <--- Corrected folder name
-    - chmod +x mvnw                  # Ensure the wrapper is executable
+    - cd product-service
+    - chmod +x mvnw
     - ./mvnw clean package -DskipTests
   artifacts:
     paths:
-      - product-service/target/*.jar # <--- Path updated
-    expire_in: 1 hour
+      - product-service/target/*.jar
+  rules:
+    - changes:
+        - product-service/**/*
 
-# 2. Build Docker Image and Push to ECR
+build_frontend:
+  stage: build
+  image: node:18
+  script:
+    - cd product-service-fe
+    - npm install
+    - npm run build -- --configuration=production
+  artifacts:
+    paths:
+      - product-service-fe/dist/
+  rules:
+    - changes:
+        - product-service-fe/**/*
+
+# --- 3. PACKAGE STAGE (Docker) ---
 package_docker:
   stage: package
   image: docker:24.0.5
@@ -33,15 +61,31 @@ package_docker:
     - apk add --no-cache aws-cli
     - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
   script:
-    - cd product-service             # <--- Move to where Dockerfile is
+    - cd product-service
     - docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
     - docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
     - docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
     - docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+  rules:
+    - changes:
+        - product-service/**/*
 
-# 3. Update AWS ECS Service
-deploy_ecs:
+# --- 4. DEPLOY STAGE (ECS & S3) ---
+deploy_backend_ecs:
   stage: deploy
   image: amazon/aws-cli
   script:
     - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment
+  rules:
+    - changes:
+        - product-service/**/*
+
+deploy_frontend_s3:
+  stage: deploy
+  image: amazon/aws-cli
+  script:
+    # Syncing the Angular build folder to S3
+    - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete
+  rules:
+    - changes:
+        - product-service-fe/**/*
