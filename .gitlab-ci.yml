@@ -1,7 +1,7 @@
 stages:
   - validate
-  # - infra_plan
-  # - infra_apply
+  - infra_plan
+  - infra_apply
   - build
   - package
   - deploy
