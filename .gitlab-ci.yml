@@ -12,47 +12,49 @@ variables:
   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
   ECR_REPOSITORY: ${REPO_NAME}
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
-  # Add your S3 Bucket name for the Angular Frontend
-  S3_BUCKET_NAME: "your-angular-app-bucket-name"
+  S3_BUCKET_NAME: "votre-bucket-angular-ici" # Assurez-vous que ce bucket est créé par Terraform
 
-# --- 1. VALIDATE STAGE (Terraform) ---
+# --- 1. TERRAFORM STAGES (Ciblant le dossier /dev) ---
+
 terraform_validate:
   stage: validate
   image:
     name: hashicorp/terraform:latest
-    entrypoint: [""]  # <--- Cette ligne est CRUCIALE
+    entrypoint: [""]
   script:
-    - cd terraform
+    - cd terraform/dev
     - terraform init -backend=false
     - terraform validate
-# Étape 2 : Préparer le plan (voir ce qui va être fait)
+
 terraform_plan:
   stage: infra_plan
   image:
     name: hashicorp/terraform:latest
     entrypoint: [""]
   script:
-    - cd terraform
+    - cd terraform/dev
     - terraform init
     - terraform plan -out=tfplan
   artifacts:
     paths:
-      - terraform/tfplan # On garde le plan pour l'étape suivante
+      - terraform/dev/tfplan # Chemin précis pour l'artifact
+    expire_in: 1 hour
 
-# Étape 3 : Appliquer les changements (Création de l'ECR)
 terraform_apply:
   stage: infra_apply
   image:
     name: hashicorp/terraform:latest
     entrypoint: [""]
   script:
-    - cd terraform
+    - cd terraform/dev
     - terraform init
     - terraform apply -auto-approve tfplan
-  when: manual  # <--- C'est ici que vous déclenchez l'action manuellement
+  when: manual
   dependencies:
     - terraform_plan
+
 # --- 2. BUILD STAGE (Java & Angular) ---
+
 build_backend:
   stage: build
   image: maven:3.8.5-openjdk-17
@@ -82,6 +84,7 @@ build_frontend:
         - product-service-fe/**/*
 
 # --- 3. PACKAGE STAGE (Docker) ---
+
 package_docker:
   stage: package
   image: docker:24.0.5
@@ -101,6 +104,7 @@ package_docker:
         - product-service/**/*
 
 # --- 4. DEPLOY STAGE (ECS & S3) ---
+
 deploy_backend_ecs:
   stage: deploy
   image: amazon/aws-cli
@@ -114,7 +118,7 @@ deploy_frontend_s3:
   stage: deploy
   image: amazon/aws-cli
   script:
-    # Syncing the Angular build folder to S3
+    # Note: ajustez le chemin dist/ si le nom du projet Angular est différent
     - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete
   rules:
     - changes:
