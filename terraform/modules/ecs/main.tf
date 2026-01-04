@@ -32,20 +32,50 @@ resource "aws_ecs_cluster" "this" {
 #################################
 # Security Group
 #################################
+# SG des tasks ECS (privé) : n'accepte que le trafic venant du SG ALB
 resource "aws_security_group" "ecs_tasks" {
   name        = "${var.project}-${var.environment}-ecs-tasks-sg"
   description = "ECS tasks security group"
   vpc_id      = var.vpc_id
   tags        = local.common_tags
-
-  # IMPORTANT: pour un test rapide sans ALB (temporaire).
-  # Si vous ajoutez un ALB ensuite, vous remplacerez ça par "ingress depuis SG du ALB".
   ingress {
     from_port   = var.frontend_port
     to_port     = var.frontend_port
     protocol    = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+}
+  # IMPORTANT: pour un test rapide sans ALB (temporaire).
+  # Si vous ajoutez un ALB ensuite, vous remplacerez ça par "ingress depuis SG du ALB".
+
+# SG du Load Balancer (public)
+resource "aws_security_group" "alb" {
+  name        = "${var.project}-${var.environment}-alb-sg"
+  description = "ALB security group"
+  vpc_id      = var.vpc_id
+  tags        = local.common_tags
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # (Optionnel plus tard) HTTPS 443 ici si tu ajoutes un certificat ACM
+  # ingress {
+  #   from_port   = 443
+  #   to_port     = 443
+  #   protocol    = "tcp"
+  #   cidr_blocks = ["0.0.0.0/0"]
+  # }
 
   egress {
     from_port   = 0
@@ -109,7 +139,7 @@ resource "aws_ecs_task_definition" "this" {
         logDriver = "awslogs"
         options = {
           awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = "us-east-1"
+          awslogs-region        = "eu-north-1"
           awslogs-stream-prefix = "backend"
         }
       }
@@ -139,7 +169,7 @@ resource "aws_ecs_task_definition" "this" {
         logDriver = "awslogs"
         options = {
           awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = "us-east-1"
+          awslogs-region        = "eu-north-1"
           awslogs-stream-prefix = "frontend"
         }
       }
@@ -163,4 +193,11 @@ resource "aws_ecs_service" "this" {
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = false
   }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.frontend.arn
+    container_name   = "frontend"
+    container_port   = var.frontend_port
+  }
+
+  depends_on = [aws_lb_listener.http]
 }

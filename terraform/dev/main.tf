@@ -1,5 +1,5 @@
 provider "aws" {
-  region = "us-east-1"
+  region = "eu-north-1"
 }
 
 module "vpc" {
@@ -10,20 +10,22 @@ module "vpc" {
 
   vpc_cidr = "10.10.0.0/16"
 
-  # 1 seule AZ pour DEV (coût réduit)
-  azs = ["us-east-1a"]
+  # 2 AZ minimum pour ALB
+  azs = ["eu-north-1a", "eu-north-1b"]
 
-  # 1 subnet public /24
+  # 2 subnets publics (1 par AZ)
   public_subnet_cidrs = [
-    "10.10.10.0/24"
+    "10.10.10.0/24",
+    "10.10.11.0/24"
   ]
 
-  # 1 subnet privé /24
+  # 2 subnets privés (1 par AZ)
   private_subnet_cidrs = [
-    "10.10.20.0/24"
+    "10.10.20.0/24",
+    "10.10.21.0/24"
   ]
 
-  # DEV: 1 NAT gateway (toujours OK, et nécessaire si ECS est en subnet privé)
+  # DEV: 1 NAT gateway (moins cher)
   single_nat_gateway = true
 
   tags = {
@@ -38,10 +40,15 @@ module "ecs" {
   environment = "dev"
 
   vpc_id             = module.vpc.vpc_id
+  public_subnet_ids  = module.vpc.public_subnet_ids
   private_subnet_ids = module.vpc.private_subnet_ids
 
   backend_image  = var.backend_image
   frontend_image = var.frontend_image
+
+  autoscaling_min        = 1
+  autoscaling_max        = 4
+  autoscaling_cpu_target = 60
 }
 
 module "ecr_backend" {
@@ -59,5 +66,17 @@ module "ecr_frontend" {
   tags = {
     Project     = "devops-project"
     Environment = "dev"
+  }
+}
+
+module "sqs" {
+  source = "../modules/sqs"
+
+  project     = "devops-project"
+  environment = "dev"
+
+  lambda_zip_path = var.lambda_zip_path
+  tags = {
+    Owner = "team-devops"
   }
 }

@@ -5,6 +5,7 @@ stages:
   - build
   - package
   - deploy
+  - cleanup
 
 variables:
   DOCKER_DRIVER: overlay2
@@ -14,7 +15,27 @@ variables:
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
   S3_BUCKET_NAME: "votre-bucket-angular-ici" # Assurez-vous que ce bucket est créé par Terraform
 
-# --- 1. TERRAFORM STAGES (Ciblant le dossier /dev) ---
+# --- 0. PACKAGE LAMBDA ZIP (doit être AVANT terraform plan/apply) ---
+# On le met en stage validate pour qu’il soit disponible en infra_plan/infra_apply via artifacts.
+package_lambda:
+  stage: validate
+  image: node:20-alpine
+  script:
+    - apk add --no-cache zip
+    - mkdir -p dist
+    - test -f lambda/worker/index.js
+    # zip avec index.js à la racine (handler = index.handler)
+    - cd lambda/worker
+    - zip -r ../../dist/lambda_nodejs.zip index.js
+  artifacts:
+    paths:
+      - dist/lambda_nodejs.zip
+    expire_in: 1 hour
+  rules:
+    - changes:
+        - lambda/worker/**/*
+
+# --- 1. TERRAFORM STAGES (Ciblant le dossier /terraform/dev) ---
 
 terraform_validate:
   stage: validate
@@ -31,13 +52,16 @@ terraform_plan:
   image:
     name: hashicorp/terraform:latest
     entrypoint: [""]
+  dependencies:
+    - package_lambda
   script:
     - cd terraform/dev
     - terraform init
-    - terraform plan -out=tfplan
+    # Le zip est récupéré dans le workspace via artifacts, donc chemin absolu CI_PROJECT_DIR
+    - terraform plan -out=tfplan -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
   artifacts:
     paths:
-      - terraform/dev/tfplan # Chemin précis pour l'artifact
+      - terraform/dev/tfplan
     expire_in: 1 hour
 
 terraform_apply:
@@ -45,13 +69,14 @@ terraform_apply:
   image:
     name: hashicorp/terraform:latest
     entrypoint: [""]
+  dependencies:
+    - terraform_plan
+    - package_lambda
   script:
     - cd terraform/dev
     - terraform init
     - terraform apply -auto-approve tfplan
   when: manual
-  dependencies:
-    - terraform_plan
 
 # --- 2. BUILD STAGE (Java & Angular) ---
 
@@ -109,7 +134,7 @@ deploy_backend_ecs:
   stage: deploy
   image: amazon/aws-cli
   script:
-    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment
+    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment --region $AWS_REGION
   rules:
     - changes:
         - product-service/**/*
@@ -118,8 +143,21 @@ deploy_frontend_s3:
   stage: deploy
   image: amazon/aws-cli
   script:
-    # Note: ajustez le chemin dist/ si le nom du projet Angular est différent
-    - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete
+    - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete --region $AWS_REGION
   rules:
     - changes:
         - product-service-fe/**/*
+
+terraform_destroy:
+  stage: cleanup
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]
+  dependencies:
+    - package_lambda
+  script:
+    - cd terraform/dev
+    - terraform init
+    - terraform destroy -auto-approve -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
+  when: manual
+  allow_failure: false
