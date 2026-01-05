@@ -88,20 +88,17 @@ resource "aws_security_group" "alb" {
 #################################
 # IAM Role & Policy (Execution Role)
 #################################
-data "aws_iam_policy_document" "ecs_task_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
-}
-
 resource "aws_iam_role" "task_execution" {
   name               = "${var.project}-${var.environment}-ecs-exec-role"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
-  tags               = local.common_tags
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+  tags = local.common_tags
 }
 
 resource "aws_iam_role_policy_attachment" "exec_policy" {
@@ -121,12 +118,19 @@ resource "aws_ecs_task_definition" "this" {
   execution_role_arn       = aws_iam_role.task_execution.arn
   tags                     = local.common_tags
 
-  # 2 containers: backend + frontend
   container_definitions = jsonencode([
     {
       name      = "backend"
       image     = var.backend_image
       essential = true
+
+      # Injection des variables pour Spring Boot (RDS)
+      environment = [
+        { name = "RDS_HOSTNAME", value = var.rds_hostname },
+        { name = "RDS_DB_NAME",  value = var.rds_db_name },
+        { name = "RDS_USERNAME", value = var.rds_username },
+        { name = "RDS_PASSWORD", value = var.rds_password }
+      ]
 
       portMappings = [
         {
@@ -160,7 +164,7 @@ resource "aws_ecs_task_definition" "this" {
         }
       ]
 
-      # Le frontend (nginx) proxy vers le backend dans la même task via localhost
+      # Le frontend communique avec le backend via localhost dans la même task
       environment = [
         { name = "BACKEND_URL", value = "http://127.0.0.1:${var.backend_port}" }
       ]
@@ -200,4 +204,11 @@ resource "aws_ecs_service" "this" {
   }
 
   depends_on = [aws_lb_listener.http]
+}
+
+#################################
+# Output du SG pour le module RDS
+#################################
+output "service_sg_id" {
+  value = aws_security_group.ecs_tasks.id
 }
