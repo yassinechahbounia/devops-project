@@ -60,6 +60,26 @@ variable "tags" {
   default = {}
 }
 
+variable "rds_hostname" {
+  description = "L'adresse (endpoint) de la base de données RDS"
+  type        = string
+}
+
+variable "rds_db_name" {
+  description = "Le nom de la base de données"
+  type        = string
+}
+
+variable "rds_username" {
+  description = "L'utilisateur de la base de données"
+  type        = string
+}
+
+variable "rds_password" {
+  description = "Le mot de passe de la base de données"
+  type        = string
+  sensitive   = true
+}
 variable "vpc_id" {
   type = string
 }

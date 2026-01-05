@@ -8,6 +8,10 @@ variable "frontend_image" {
   type        = string
 }
 
+variable "db_password" { 
+  type = string
+  sensitive = true 
+}
 variable "lambda_zip_path" {
   type        = string
   description = "Chemin local du zip Lambda (Node.js)."

@@ -13,9 +13,9 @@ variables:
   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
   ECR_REPOSITORY: ${REPO_NAME}
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
-  S3_BUCKET_NAME: "votre-bucket-angular-ici" # assure-toi qu'il existe
-  TF_BACKEND_BUCKET: "votre-bucket-terraform" # bucket S3 pour state
-  TF_LOCK_TABLE: "terraform-lock"            # table DynamoDB pour lock
+  S3_BUCKET_NAME: "votre-bucket-angular-ici"
+  TF_BACKEND_BUCKET: "votre-bucket-terraform"
+  TF_LOCK_TABLE: "terraform-lock"
   AWS_DEFAULT_REGION: ${AWS_REGION}
 
 # -----------------------------
@@ -61,7 +61,10 @@ terraform_plan:
         -backend-config="key=dev/terraform.tfstate" \
         -backend-config="region=${AWS_REGION}" \
         -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
-    - terraform plan -out=tfplan -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
+    - terraform plan -out=tfplan \
+        -var="image_tag=$CI_COMMIT_SHORT_SHA" \
+        -var="db_password=$TF_VAR_db_password" \
+        -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
   artifacts:
     paths:
       - terraform/dev/tfplan
@@ -145,20 +148,27 @@ package_docker:
 deploy_backend_ecs:
   stage: deploy
   image: amazon/aws-cli
+  needs:
+    - job: terraform_apply
+    - job: package_docker
   script:
+    - echo "Déploiement de la version $IMAGE_TAG sur ECS..."
     - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment --region $AWS_REGION
   rules:
-    - changes:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
         - product-service/**/*
+        - product-service-fe/**/*
 
-deploy_frontend_s3:
+deploy_static_s3:
   stage: deploy
   image: amazon/aws-cli
+  needs: ["build_frontend"]
   script:
     - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete --region $AWS_REGION
   rules:
-    - changes:
-        - product-service-fe/**/*
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
 
 # -----------------------------
 # 5. CLEANUP
