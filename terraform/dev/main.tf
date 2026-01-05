@@ -25,6 +25,11 @@ module "vpc" {
 #################################
 # Conteneurs (ECS)
 #################################
+variable "image_tag" {
+  type    = string
+  default = "latest"
+}
+
 module "ecs" {
   source = "../modules/ecs"
 
@@ -34,8 +39,8 @@ module "ecs" {
   public_subnet_ids  = module.vpc.public_subnet_ids
   private_subnet_ids = module.vpc.private_subnet_ids
 
-  backend_image  = var.backend_image
-  frontend_image = var.frontend_image
+  backend_image  = "${module.ecr_backend.repository_url}:${var.image_tag}"
+  frontend_image = "${module.ecr_frontend.repository_url}:${var.image_tag}"
 
   # --- CRITIQUE : Connexion à la base de données ---
   # Ces variables doivent être déclarées dans modules/ecs/variables.tf
