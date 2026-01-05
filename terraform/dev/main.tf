@@ -61,3 +61,20 @@ module "ecr_frontend" {
     Environment = "dev"
   }
 }
+
+module "rds" {
+  source = "../modules/rds"
+
+  project            = "devops-project"
+  environment        = "dev"
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+  
+  # Variables de l'application
+  db_name     = "productdb"
+  db_username = "admin"
+  db_password = var.db_password # Ajoutez cette variable dans variables.tf
+  
+  # Lien avec ECS
+  ecs_sg_id = module.ecs.service_sg_id # Assurez-vous que votre module ECS exporte son Security Group
+}
