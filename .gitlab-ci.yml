@@ -13,18 +13,20 @@ variables:
   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
   ECR_REPOSITORY: ${REPO_NAME}
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
-  S3_BUCKET_NAME: "votre-bucket-angular-ici" # Assurez-vous que ce bucket est créé par Terraform
+  S3_BUCKET_NAME: "votre-bucket-angular-ici" # assure-toi qu'il existe
+  TF_BACKEND_BUCKET: "votre-bucket-terraform" # bucket S3 pour state
+  TF_LOCK_TABLE: "terraform-lock"            # table DynamoDB pour lock
+  AWS_DEFAULT_REGION: ${AWS_REGION}
 
-# --- 0. PACKAGE LAMBDA ZIP (doit être AVANT terraform plan/apply) ---
-# On le met en stage validate pour qu’il soit disponible en infra_plan/infra_apply via artifacts.
+# -----------------------------
+# 0. PACKAGE LAMBDA
+# -----------------------------
 package_lambda:
   stage: validate
   image: node:20-alpine
   script:
     - apk add --no-cache zip
     - mkdir -p dist
-    - test -f lambda/worker/index.js
-    # zip avec index.js à la racine (handler = index.handler)
     - cd lambda/worker
     - zip -r ../../dist/lambda_nodejs.zip index.js
   artifacts:
@@ -35,13 +37,12 @@ package_lambda:
     - changes:
         - lambda/worker/**/*
 
-# --- 1. TERRAFORM STAGES (Ciblant le dossier /terraform/dev) ---
-
+# -----------------------------
+# 1. TERRAFORM
+# -----------------------------
 terraform_validate:
   stage: validate
-  image:
-    name: hashicorp/terraform:latest
-    entrypoint: [""]
+  image: hashicorp/terraform:latest
   script:
     - cd terraform/dev
     - terraform init -backend=false
@@ -49,15 +50,17 @@ terraform_validate:
 
 terraform_plan:
   stage: infra_plan
-  image:
-    name: hashicorp/terraform:latest
-    entrypoint: [""]
-  dependencies:
-    - package_lambda
+  image: hashicorp/terraform:latest
+  needs:
+    - job: package_lambda
+      artifacts: true
   script:
     - cd terraform/dev
-    - terraform init
-    # Le zip est récupéré dans le workspace via artifacts, donc chemin absolu CI_PROJECT_DIR
+    - terraform init \
+        -backend-config="bucket=${TF_BACKEND_BUCKET}" \
+        -backend-config="key=dev/terraform.tfstate" \
+        -backend-config="region=${AWS_REGION}" \
+        -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
     - terraform plan -out=tfplan -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
   artifacts:
     paths:
@@ -66,20 +69,27 @@ terraform_plan:
 
 terraform_apply:
   stage: infra_apply
-  image:
-    name: hashicorp/terraform:latest
-    entrypoint: [""]
-  dependencies:
-    - terraform_plan
-    - package_lambda
+  image: hashicorp/terraform:latest
+  needs:
+    - job: terraform_plan
+      artifacts: true
+    - job: package_lambda
+      artifacts: true
   script:
     - cd terraform/dev
-    - terraform init
+    - terraform init \
+        -backend-config="bucket=${TF_BACKEND_BUCKET}" \
+        -backend-config="key=dev/terraform.tfstate" \
+        -backend-config="region=${AWS_REGION}" \
+        -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
     - terraform apply -auto-approve tfplan
   when: manual
+  only:
+    - main
 
-# --- 2. BUILD STAGE (Java & Angular) ---
-
+# -----------------------------
+# 2. BUILD
+# -----------------------------
 build_backend:
   stage: build
   image: maven:3.8.5-openjdk-17
@@ -108,8 +118,9 @@ build_frontend:
     - changes:
         - product-service-fe/**/*
 
-# --- 3. PACKAGE STAGE (Docker) ---
-
+# -----------------------------
+# 3. PACKAGE DOCKER
+# -----------------------------
 package_docker:
   stage: package
   image: docker:24.0.5
@@ -128,8 +139,9 @@ package_docker:
     - changes:
         - product-service/**/*
 
-# --- 4. DEPLOY STAGE (ECS & S3) ---
-
+# -----------------------------
+# 4. DEPLOY
+# -----------------------------
 deploy_backend_ecs:
   stage: deploy
   image: amazon/aws-cli
@@ -148,16 +160,22 @@ deploy_frontend_s3:
     - changes:
         - product-service-fe/**/*
 
+# -----------------------------
+# 5. CLEANUP
+# -----------------------------
 terraform_destroy:
   stage: cleanup
-  image:
-    name: hashicorp/terraform:latest
-    entrypoint: [""]
-  dependencies:
-    - package_lambda
+  image: hashicorp/terraform:latest
+  needs:
+    - job: package_lambda
+      artifacts: true
   script:
     - cd terraform/dev
-    - terraform init
+    - terraform init \
+        -backend-config="bucket=${TF_BACKEND_BUCKET}" \
+        -backend-config="key=dev/terraform.tfstate" \
+        -backend-config="region=${AWS_REGION}" \
+        -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
     - terraform destroy -auto-approve -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
   when: manual
   allow_failure: false
