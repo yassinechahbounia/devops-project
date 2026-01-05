@@ -57,12 +57,14 @@ terraform_plan:
   script:
     - cd terraform/dev
     - terraform init
-    # Le zip est récupéré dans le workspace via artifacts, donc chemin absolu CI_PROJECT_DIR
-    - terraform plan -out=tfplan -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
+    - terraform plan -out=tfplan \
+        -var="image_tag=$CI_COMMIT_SHORT_SHA" \
+        -var="db_password=$TF_VAR_db_password" \
+        -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
   artifacts:
-    paths:
-      - terraform/dev/tfplan
-    expire_in: 1 hour
+  paths:
+    - terraform/dev/tfplan
+  expire_in: 1 hour
 
 terraform_apply:
   stage: infra_apply
@@ -129,24 +131,29 @@ package_docker:
         - product-service/**/*
 
 # --- 4. DEPLOY STAGE (ECS & S3) ---
-
-deploy_backend_ecs:
+deploy_app_ecs:
   stage: deploy
   image: amazon/aws-cli
+  needs: ["terraform_apply", "package_backend", "package_frontend"]
   script:
+    - echo "Déploiement de la version $IMAGE_TAG sur ECS..."
     - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment --region $AWS_REGION
   rules:
-    - changes:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
         - product-service/**/*
+        - product-service-fe/**/*
 
-deploy_frontend_s3:
+# Optionnel : Uniquement si vous hébergez AUSSI sur S3
+deploy_static_backup_s3:
   stage: deploy
   image: amazon/aws-cli
+  needs: ["build_frontend"]
   script:
     - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete --region $AWS_REGION
   rules:
-    - changes:
-        - product-service-fe/**/*
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual # On le met en manuel pour ne pas gaspiller de ressources
 
 terraform_destroy:
   stage: cleanup
