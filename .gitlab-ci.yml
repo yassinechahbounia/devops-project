@@ -232,10 +232,10 @@ deploy_frontend_s3:
   rules:
     - changes:
         - product-service-fe/**/*
-        
-  #####################
-  # Terraform Destroy #
-  #####################
+
+  ######################
+  # Terraform Destroy ##
+  ######################
   terraform_destroy_dev:
   image:
     name: hashicorp/terraform:latest
