@@ -150,7 +150,12 @@ terraform_apply:
     - cd terraform/dev
     - terraform init
     - terraform apply -auto-approve tfplan
-  when: manual
+  
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+      when: on_success
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
   #dependencies:
   #  - terraform_plan
 
