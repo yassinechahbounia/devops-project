@@ -1,63 +1,189 @@
+# variables:
+#   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+#   ECR_REPOSITORY: ${REPO_NAME}
+#   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+#   S3_BUCKET_NAME: "votre-bucket-angular-ici"
+#   TF_BACKEND_BUCKET: "votre-bucket-terraform"
+#   TF_LOCK_TABLE: "terraform-lock"
+#   AWS_DEFAULT_REGION: ${AWS_REGION}
+
+# # -----------------------------
+# # 0) PACKAGE LAMBDA ZIP
+# # -----------------------------
+# package_lambda:
+#   stage: validate
+#   image: node:18
+#   script:
+#     - mkdir -p dist
+#     - cd lambda/worker && npm install && zip -r ../../dist/lambda_nodejs.zip .
+#   artifacts:
+#     paths:
+#       - dist/lambda_nodejs.zip
+#   rules:
+#     - changes:
+#         - lambda/worker/**/*
+
+# # -----------------------------
+# # 1) TERRAFORM
+# # -----------------------------
+# terraform_validate:
+#   stage: validate
+#   image: hashicorp/terraform:light
+#   script:
+#     - cd terraform/dev
+#     - terraform init -backend-config="bucket=${TF_BACKEND_BUCKET}" -backend-config="key=dev/terraform.tfstate" -backend-config="region=${AWS_REGION}" -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
+#     - terraform validate
+
+# terraform_plan:
+#   stage: validate
+#   image: hashicorp/terraform:light
+#   needs:
+#     - job: package_lambda
+#       artifacts: true
+#   script:
+#     - cd terraform/dev
+#     - terraform init -reconfigure -backend-config="bucket=${TF_BACKEND_BUCKET}" -backend-config="key=dev/terraform.tfstate" -backend-config="region=${AWS_REGION}" -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
+#     - terraform plan -out=tfplan -var="image_tag=$CI_COMMIT_SHORT_SHA" -var="db_password=$TF_VAR_db_password" -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
+#   artifacts:
+#     paths:
+#       - terraform/dev/tfplan
+
+# # ... (les autres étapes build/package restent inchangées)
+
+# deploy_static_s3:
+#   stage: deploy
+#   image: amazon/aws-cli
+#   needs:
+#     - job: build_frontend
+#       artifacts: true
+#   script:
+#     - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete --region $AWS_REGION
+#   rules:
+#     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+#       when: manual
+
+stages:
+  - validate
+  - infra_plan
+  - infra_apply
+  - build
+  - package
+  - deploy
+
 variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
   ECR_REPOSITORY: ${REPO_NAME}
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
-  S3_BUCKET_NAME: "votre-bucket-angular-ici"
-  TF_BACKEND_BUCKET: "votre-bucket-terraform"
-  TF_LOCK_TABLE: "terraform-lock"
-  AWS_DEFAULT_REGION: ${AWS_REGION}
+  S3_BUCKET_NAME: "votre-bucket-angular-ici" # Assurez-vous que ce bucket est créé par Terraform
 
-# -----------------------------
-# 0) PACKAGE LAMBDA ZIP
-# -----------------------------
-package_lambda:
-  stage: validate
-  image: node:18
-  script:
-    - mkdir -p dist
-    - cd lambda/worker && npm install && zip -r ../../dist/lambda_nodejs.zip .
-  artifacts:
-    paths:
-      - dist/lambda_nodejs.zip
-  rules:
-    - changes:
-        - lambda/worker/**/*
+# --- 1. TERRAFORM STAGES (Ciblant le dossier /dev) ---
 
-# -----------------------------
-# 1) TERRAFORM
-# -----------------------------
 terraform_validate:
   stage: validate
-  image: hashicorp/terraform:light
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]
   script:
     - cd terraform/dev
-    - terraform init -backend-config="bucket=${TF_BACKEND_BUCKET}" -backend-config="key=dev/terraform.tfstate" -backend-config="region=${AWS_REGION}" -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
+    - terraform init -backend=false
     - terraform validate
 
 terraform_plan:
-  stage: validate
-  image: hashicorp/terraform:light
-  needs:
-    - job: package_lambda
-      artifacts: true
+  stage: infra_plan
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]
   script:
     - cd terraform/dev
-    - terraform init -reconfigure -backend-config="bucket=${TF_BACKEND_BUCKET}" -backend-config="key=dev/terraform.tfstate" -backend-config="region=${AWS_REGION}" -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
-    - terraform plan -out=tfplan -var="image_tag=$CI_COMMIT_SHORT_SHA" -var="db_password=$TF_VAR_db_password" -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
+    - terraform init
+    - terraform plan -out=tfplan
   artifacts:
     paths:
-      - terraform/dev/tfplan
+      - terraform/dev/tfplan # Chemin précis pour l'artifact
+    expire_in: 1 hour
 
-# ... (les autres étapes build/package restent inchangées)
+terraform_apply:
+  stage: infra_apply
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]
+  script:
+    - cd terraform/dev
+    - terraform init
+    - terraform apply -auto-approve tfplan
+  when: manual
+  dependencies:
+    - terraform_plan
 
-deploy_static_s3:
+# --- 2. BUILD STAGE (Java & Angular) ---
+
+build_backend:
+  stage: build
+  image: maven:3.8.5-openjdk-17
+  script:
+    - cd product-service
+    - chmod +x mvnw
+    - ./mvnw clean package -DskipTests
+  artifacts:
+    paths:
+      - product-service/target/*.jar
+  rules:
+    - changes:
+        - product-service/**/*
+
+build_frontend:
+  stage: build
+  image: node:18
+  script:
+    - cd product-service-fe
+    - npm install
+    - npm run build -- --configuration=production
+  artifacts:
+    paths:
+      - product-service-fe/dist/
+  rules:
+    - changes:
+        - product-service-fe/**/*
+
+# --- 3. PACKAGE STAGE (Docker) ---
+
+package_docker:
+  stage: package
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - apk add --no-cache aws-cli
+    - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+  script:
+    - cd product-service
+    - docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+    - docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+    - docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+    - docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+  rules:
+    - changes:
+        - product-service/**/*
+
+# --- 4. DEPLOY STAGE (ECS & S3) ---
+
+deploy_backend_ecs:
   stage: deploy
   image: amazon/aws-cli
-  needs:
-    - job: build_frontend
-      artifacts: true
   script:
-    - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete --region $AWS_REGION
+    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
+    - changes:
+        - product-service/**/*
+
+deploy_frontend_s3:
+  stage: deploy
+  image: amazon/aws-cli
+  script:
+    # Note: ajustez le chemin dist/ si le nom du projet Angular est différent
+    - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete
+  rules:
+    - changes:
+        - product-service-fe/**/*
