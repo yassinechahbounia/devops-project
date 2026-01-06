@@ -2,11 +2,11 @@
  # value = aws_db_instance.mysql.address # Retourne l'hôte sans le port
 #}
 
-output "endpoint" {
+output "db_instance_endpoint" {
   value = aws_db_instance.mysql.address
 }
 
-output "port" {
+output "db_port" {
   value = aws_db_instance.mysql.port
 }
 
