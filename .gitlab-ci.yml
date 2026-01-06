@@ -137,10 +137,10 @@ terraform_plan:
     expire_in: 1 hour
 
 terraform_apply:
-  stage: infra_apply
   image:
     name: hashicorp/terraform:latest
-    #entrypoint: [""]
+    entrypoint: [""]
+  stage: infra_apply
   ##################
   needs:
     - job: terraform_plan
@@ -151,7 +151,7 @@ terraform_apply:
   script:
     - cd terraform/dev
     - terraform init
-    - test -f "${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
+    #- test -f "${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
     - terraform apply -auto-approve tfplan
   
   rules:
