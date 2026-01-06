@@ -98,9 +98,9 @@ package_lambda:
     paths:
       - dist/lambda_nodejs.zip
     expire_in: 1 hour
-  rules:
-    - changes:
-        - lambda/worker/**/*
+  #rules:
+  #  - changes:
+  #      - lambda/worker/**/*
 
 # --- 1. TERRAFORM STAGES (Ciblant le dossier /dev) ---
 
