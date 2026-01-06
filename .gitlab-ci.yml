@@ -232,3 +232,19 @@ deploy_frontend_s3:
   rules:
     - changes:
         - product-service-fe/**/*
+        
+  #####################
+  # Terraform Destroy #
+  #####################
+  terraform_destroy_dev:
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]
+  stage: infra_destroy
+  script:
+    - cd terraform/dev
+    - terraform init
+    - terraform plan -destroy
+    - terraform destroy -auto-approve
+  when: manual
+  allow_failure: false
