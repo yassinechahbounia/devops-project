@@ -19,6 +19,8 @@ variables:
   REPO_FRONTEND: "brief3-frontend"
   
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  # Key par défaut pour le zip dans S3
+  LAMBDA_S3_KEY: "lambda/worker/lambda_nodejs.zip"
 
 # ---------------------------------------------------------
 # 0) PRÉPARATION : Lambda & Terraform Validate
@@ -57,12 +59,13 @@ terraform_plan:
   script:
     - cd terraform/dev
     - terraform init
-    # Utilisation de "|" pour éviter l'erreur "Too many command line arguments"
     - |
       terraform plan -out=tfplan \
         -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip" \
         -var="image_tag=${IMAGE_TAG}" \
-        -var="db_password=${TF_VAR_db_password}"
+        -var="db_password=${TF_VAR_db_password}" \
+        -var="lambda_s3_bucket=${LAMBDA_ARTIFACTS_BUCKET}" \
+        -var="lambda_s3_key=${LAMBDA_S3_KEY}"
   artifacts:
     paths:
       - terraform/dev/tfplan
@@ -143,4 +146,24 @@ deploy_ecs:
   image: amazon/aws-cli
   needs: ["terraform_apply", "package_backend", "package_frontend"]
   script:
-    - aws ecs update-service --cluster $ECS
+    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment --region $AWS_REGION
+
+# ---------------------------------------------------------
+# 5) CLEANUP : Terraform Destroy
+# ---------------------------------------------------------
+terraform_destroy:
+  stage: cleanup
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]
+  script:
+    - cd terraform/dev
+    - terraform init
+    - |
+      terraform destroy -auto-approve \
+        -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip" \
+        -var="image_tag=${IMAGE_TAG}" \
+        -var="db_password=${TF_VAR_db_password}" \
+        -var="lambda_s3_bucket=${LAMBDA_ARTIFACTS_BUCKET}" \
+        -var="lambda_s3_key=${LAMBDA_S3_KEY}"
+  when: manual

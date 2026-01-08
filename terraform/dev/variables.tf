@@ -19,6 +19,7 @@ variable "lambda_zip_path" {
 
 variable "lambda_s3_bucket" { 
   type = string 
+  default = "lambda-s3-bucket-devops-brief"
 }
 variable "lambda_s3_key"    {
   type = string 
