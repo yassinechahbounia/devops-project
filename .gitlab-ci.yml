@@ -147,7 +147,6 @@ deploy_ecs:
   needs: ["terraform_apply", "package_backend", "package_frontend"]
   script:
     - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment --region $AWS_REGION
-
 # ---------------------------------------------------------
 # 5) CLEANUP : Terraform Destroy
 # ---------------------------------------------------------
