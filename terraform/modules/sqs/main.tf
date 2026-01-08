@@ -69,7 +69,7 @@ resource "aws_lambda_function" "worker" {
   handler       = var.lambda_handler
   runtime       = var.lambda_runtime
 
-  s3_bucket = var.lambda_s3_bucket
+  s3_bucket = aws_s3_bucket.lambda_artifacts.id  # Référence interne
   s3_key    = var.lambda_s3_key
 
   #filename         = var.lambda_zip_path
@@ -85,4 +85,8 @@ resource "aws_lambda_event_source_mapping" "from_sqs" {
 
   batch_size = var.batch_size
   enabled    = true
+}
+resource "aws_s3_bucket" "lambda_artifacts" {
+  bucket = "lambda-s3-bucket-devops-brief-${var.environment}" 
+  force_destroy = true # Permet de supprimer le bucket même s'il contient des fichiers
 }

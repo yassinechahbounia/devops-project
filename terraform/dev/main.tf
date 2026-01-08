@@ -94,7 +94,7 @@ module "ecr_frontend" {
 module "sqs" {
   source = "../modules/sqs"
 
-  lambda_s3_bucket = var.lambda_s3_bucket
+  # lambda_s3_bucket = var.lambda_s3_bucket
   lambda_s3_key    = var.lambda_s3_key
   # lambda_source_code_hash = var.lambda_source_code_hash
   
