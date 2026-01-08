@@ -1,114 +1,44 @@
-# variables:
-#   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-#   ECR_REPOSITORY: ${REPO_NAME}
-#   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
-#   S3_BUCKET_NAME: "votre-bucket-angular-ici"
-#   TF_BACKEND_BUCKET: "votre-bucket-terraform"
-#   TF_LOCK_TABLE: "terraform-lock"
-#   AWS_DEFAULT_REGION: ${AWS_REGION}
-
-# # -----------------------------
-# # 0) PACKAGE LAMBDA ZIP
-# # -----------------------------
-# package_lambda:
-#   stage: validate
-#   image: node:18
-#   script:
-#     - mkdir -p dist
-#     - cd lambda/worker && npm install && zip -r ../../dist/lambda_nodejs.zip .
-#   artifacts:
-#     paths:
-#       - dist/lambda_nodejs.zip
-#   rules:
-#     - changes:
-#         - lambda/worker/**/*
-
-# # -----------------------------
-# # 1) TERRAFORM
-# # -----------------------------
-# terraform_validate:
-#   stage: validate
-#   image: hashicorp/terraform:light
-#   script:
-#     - cd terraform/dev
-#     - terraform init -backend-config="bucket=${TF_BACKEND_BUCKET}" -backend-config="key=dev/terraform.tfstate" -backend-config="region=${AWS_REGION}" -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
-#     - terraform validate
-
-# terraform_plan:
-#   stage: validate
-#   image: hashicorp/terraform:light
-#   needs:
-#     - job: package_lambda
-#       artifacts: true
-#   script:
-#     - cd terraform/dev
-#     - terraform init -reconfigure -backend-config="bucket=${TF_BACKEND_BUCKET}" -backend-config="key=dev/terraform.tfstate" -backend-config="region=${AWS_REGION}" -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
-#     - terraform plan -out=tfplan -var="image_tag=$CI_COMMIT_SHORT_SHA" -var="db_password=$TF_VAR_db_password" -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
-#   artifacts:
-#     paths:
-#       - terraform/dev/tfplan
-
-# # ... (les autres étapes build/package restent inchangées)
-
-# deploy_static_s3:
-#   stage: deploy
-#   image: amazon/aws-cli
-#   needs:
-#     - job: build_frontend
-#       artifacts: true
-#   script:
-#     - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete --region $AWS_REGION
-#   rules:
-#     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-#       when: manual
-
 stages:
   - validate
   - infra_plan
   - infra_apply
-  - infra_destroy
   - build
   - package
   - deploy
+  - cleanup
 
 variables:
   TF_INPUT: "false"
   TF_IN_AUTOMATION: "true"
-
   DOCKER_DRIVER: overlay2
   DOCKER_TLS_CERTDIR: ""
-
+  
+  # Registre ECR
   ECR_REGISTRY: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-  ECR_REPOSITORY: ${REPO_NAME}
+  # On définit les deux dépôts pour le taggage
+  REPO_BACKEND: "brief3-backend"
+  REPO_FRONTEND: "brief3-frontend"
+  
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
 
-  S3_BUCKET_NAME: "votre-bucket-angular-ici" # Assurez-vous que ce bucket est créé par Terraform
-
-# -----------------------------
-# 0) PACKAGE LAMBDA ZIP (avant Terraform)
-# -----------------------------
+# ---------------------------------------------------------
+# 0) PRÉPARATION : Lambda & Terraform Validate
+# ---------------------------------------------------------
 package_lambda:
   stage: validate
   image: node:20-alpine
   script:
     - apk add --no-cache zip
     - mkdir -p dist
-    - test -f lambda/worker/index.js
-    - cd lambda/worker
-    - zip -r ../../dist/lambda_nodejs.zip index.js
+    - cd lambda/worker && zip -r ../../dist/lambda_nodejs.zip index.js
   artifacts:
     paths:
       - dist/lambda_nodejs.zip
-    expire_in: 1 hour
-  #rules:
-  #  - changes:
-  #      - lambda/worker/**/*
-
-# --- 1. TERRAFORM STAGES (Ciblant le dossier /dev) ---
+    expire_in: 1h
 
 terraform_validate:
   stage: validate
-  image:
+  image: 
     name: hashicorp/terraform:latest
     entrypoint: [""]
   script:
@@ -116,148 +46,101 @@ terraform_validate:
     - terraform init -backend=false
     - terraform validate
 
+# ---------------------------------------------------------
+# 1) INFRASTRUCTURE : Plan & Apply
+# ---------------------------------------------------------
 terraform_plan:
   stage: infra_plan
   image:
     name: hashicorp/terraform:latest
     entrypoint: [""]
-  needs:
-    - job: package_lambda
-      artifacts: true
+  needs: ["package_lambda"]
   script:
     - cd terraform/dev
     - terraform init
-    # Vérifie que l’artifact zip est bien présent dans le runner
-    - test -f "${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
-    # IMPORTANT: on passe lambda_zip_path ici
-    - terraform plan -out=tfplan -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
+    # CRITIQUE : Passage de TOUTES les variables nécessaires
+    - terraform plan -out=tfplan \
+        -var="lambda_zip_path=${CI_PROJECT_DIR}/dist/lambda_nodejs.zip" \
+        -var="image_tag=$IMAGE_TAG" \
+        -var="db_password=$TF_VAR_db_password"
   artifacts:
     paths:
-      - terraform/dev/tfplan # Chemin précis pour l'artifact
-    expire_in: 1 hour
+      - terraform/dev/tfplan
+    expire_in: 1h
 
 terraform_apply:
   stage: infra_apply
   image:
     name: hashicorp/terraform:latest
     entrypoint: [""]
-  needs:
-    - job: terraform_plan
-      artifacts: true
-    - job: package_lambda
-      artifacts: true
+  needs: ["terraform_plan", "package_lambda"]
   script:
     - cd terraform/dev
     - terraform init
-    #- test -f "${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
     - terraform apply -auto-approve tfplan
   rules:
-    - if: $CI_COMMIT_BRANCH == "develop"
-      when: on_success
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
+      when: manual # Sécurité pour l'apply en production
 
-# -----------------------------
-# Terraform Destroy
-# -----------------------------
-terraform_destroy_dev:
-  stage: infra_destroy
-  image:
-    name: hashicorp/terraform:latest
-    entrypoint: [""]
-  script:
-    - cd terraform/dev
-    - terraform init
-    - terraform plan -destroy
-    - terraform destroy -auto-approve
-  when: manual
-  allow_failure: false
-
-# --- 2. BUILD STAGE (Java & Angular) ---
-
+# ---------------------------------------------------------
+# 2) BUILD : Compilation Java & Angular
+# ---------------------------------------------------------
 build_backend:
   stage: build
   image: maven:3.8.5-openjdk-17
   script:
-    - cd product-service
-    - chmod +x mvnw
-    - ./mvnw clean package -DskipTests
+    - cd product-service && ./mvnw clean package -DskipTests
   artifacts:
     paths:
       - product-service/target/*.jar
-  rules:
-    - changes:
-        - product-service/**/*
 
 build_frontend:
   stage: build
   image: node:18
   script:
-    - cd product-service-fe
-    - npm install
-    - npm run build -- --configuration=production
+    - cd product-service-fe && npm install && npm run build -- --configuration=production
   artifacts:
     paths:
       - product-service-fe/dist/
-  rules:
-    - changes:
-        - product-service-fe/**/*
 
-# --- 3. PACKAGE STAGE (Docker) ---
-
-package_docker:
-  stage: package
+# ---------------------------------------------------------
+# 3) PACKAGE : Docker Push (Backend & Frontend)
+# ---------------------------------------------------------
+.docker_setup: &docker_setup
   image: docker:24.0.5
-  services:
-    - docker:24.0.5-dind
+  services: ["docker:24.0.5-dind"]
   before_script:
     - apk add --no-cache aws-cli
     - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+package_backend:
+  <<: *docker_setup
+  stage: package
+  needs: ["build_backend"]
   script:
     - cd product-service
-    - docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-    - docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-    - docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-    - docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-  rules:
-    - changes:
-        - product-service/**/*
+    - docker build -t $ECR_REGISTRY/$REPO_BACKEND:$IMAGE_TAG .
+    - docker push $ECR_REGISTRY/$REPO_BACKEND:$IMAGE_TAG
+    - docker tag $ECR_REGISTRY/$REPO_BACKEND:$IMAGE_TAG $ECR_REGISTRY/$REPO_BACKEND:latest
+    - docker push $ECR_REGISTRY/$REPO_BACKEND:latest
 
-# --- 4. DEPLOY STAGE (ECS & S3) ---
+package_frontend:
+  <<: *docker_setup
+  stage: package
+  needs: ["build_frontend"]
+  script:
+    - cd product-service-fe
+    - docker build -t $ECR_REGISTRY/$REPO_FRONTEND:$IMAGE_TAG .
+    - docker push $ECR_REGISTRY/$REPO_FRONTEND:$IMAGE_TAG
+    - docker tag $ECR_REGISTRY/$REPO_FRONTEND:$IMAGE_TAG $ECR_REGISTRY/$REPO_FRONTEND:latest
+    - docker push $ECR_REGISTRY/$REPO_FRONTEND:latest
 
-deploy_backend_ecs:
+# ---------------------------------------------------------
+# 4) DEPLOY : Mise à jour ECS
+# ---------------------------------------------------------
+deploy_ecs:
   stage: deploy
   image: amazon/aws-cli
+  needs: ["terraform_apply", "package_backend", "package_frontend"]
   script:
-    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment
-  rules:
-    - changes:
-        - product-service/**/*
-
-deploy_frontend_s3:
-  stage: deploy
-  image: amazon/aws-cli
-  script:
-    # Note: ajustez le chemin dist/ si le nom du projet Angular est différent
-    - aws s3 sync product-service-fe/dist/product-service-fe/ s3://$S3_BUCKET_NAME --delete
-  rules:
-    - changes:
-        - product-service-fe/**/*
-###################################
-####################################
-##################################
-upload_lambda_s3:
-  stage: validate
-  image:
-    name: amazon/aws-cli:latest
-    entrypoint: [""]
-  needs:
-    - job: package_lambda
-      artifacts: true
-  script:
-    - aws --version
-    - test -f "${CI_PROJECT_DIR}/dist/lambda_nodejs.zip"
-    - aws s3 cp "${CI_PROJECT_DIR}/dist/lambda_nodejs.zip" "s3://${LAMBDA_ARTIFACTS_BUCKET}/lambda/worker/lambda_nodejs.zip"
-###################################
-###################################
-
+    - aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --force-new-deployment --region $AWS_REGION
