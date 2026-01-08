@@ -99,7 +99,7 @@ build_backend:
 
 build_frontend:
   stage: build
-  image: node:18
+  image: node:20-alpine
   script:
     - cd product-service-fe && npm install && npm run build -- --configuration=production
   artifacts:
